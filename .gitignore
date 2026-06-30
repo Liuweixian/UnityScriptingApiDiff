@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.cache/
+*.html
+.venv/
+venv/
+.DS_Store
