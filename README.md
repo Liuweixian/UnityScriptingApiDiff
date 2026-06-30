@@ -6,11 +6,13 @@
 
 工具从 Unity 文档站抓取每个版本对应的 `docdata/toc.js`（完整 API 索引树），对比两个版本之间的条目差异：
 
-| 层级 | 数据来源 | 速度 |
+| 层级 | 数据来源 | 说明 |
 |------|----------|------|
 | **类型级**（类、枚举、结构体等） | `toc.js` | 快（仅 2 次请求） |
 | **成员级**（方法、属性等增删） | 各类的 ScriptReference 页面 | 较慢（约 3000+ 页面） |
 | **签名级**（成员签名变更） | 各成员的 ScriptReference 页面 | 最慢 |
+
+`diff` 命令会依次完成以上三个层级的对比，并生成包含完整差异的报告。
 
 ## 安装
 
@@ -29,32 +31,54 @@ pip install -r requirements.txt
 python main.py versions
 ```
 
-### 快速对比（仅类型级增删）
+### 对比两个版本
 
 ```bash
-python main.py diff --from 2021.3 --to 2022.3
-# → report/2021.3-to-2022.3.html
+python main.py diff --from 2022.3 --to 2023.1
+# → report/2022.3-to-2023.1.html
 ```
 
-### 深度对比（含成员增删）
-
-```bash
-python main.py diff --from 2021.3 --to 2022.3 --members
-# → report/2021.3-to-2022.3-members.html
-```
-
-### 完整对比（含成员签名变更）
-
-```bash
-python main.py diff --from 2021.3 --to 2022.3 --members --signatures
-# → report/2021.3-to-2022.3-signatures.html
-```
+首次运行需要抓取大量页面，耗时较长。已下载的内容会缓存在 `tmp/`，中断后重新运行会从缓存继续。
 
 ### 同时输出 JSON
 
 ```bash
-python main.py diff --from 2021.3 --to 2022.3 --json
-# → report/2021.3-to-2022.3.html + report/2021.3-to-2022.3.json
+python main.py diff --from 2022.3 --to 2023.1 --json
+# → report/2022.3-to-2023.1.html + report/2022.3-to-2023.1.json
+```
+
+### 自定义输出路径
+
+```bash
+python main.py diff --from 2022.3 --to 2023.1 -o my-report.html --json my-report.json
+```
+
+## 命令行参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--from` | （必填） | 旧版本，如 `2021.3` |
+| `--to` | （必填） | 新版本，如 `2022.3` |
+| `-o`, `--output` | `report/<from>-to-<to>.html` | HTML 报告路径 |
+| `--json [PATH]` | — | 同时输出 JSON 报告 |
+| `--cache-dir` | `tmp/` | 缓存目录 |
+| `--no-cache` | — | 不使用本地缓存，强制重新下载 |
+| `--workers` | `4` | 并发下载线程数 |
+| `--request-delay` | `0.3` | 每次网络请求后的间隔（秒），用于避免触发限流 |
+| `--max-retries` | `6` | 遇到 HTTP 429/503 时的最大重试次数 |
+
+## 限流与重试
+
+Unity 文档站对高频请求会返回 **HTTP 429**。工具内置了以下保护机制：
+
+- 每次请求后自动等待 `--request-delay` 秒
+- 遇到 429/503 时按指数退避重试，并解析 `Retry-After` 响应头
+- 网络请求通过线程锁串行化，避免并发突发
+
+如果仍然频繁触发限流，可以加大间隔、减少并发：
+
+```bash
+python main.py diff --from 2022.3 --to 2023.1 --workers 2 --request-delay 0.5
 ```
 
 ## 报告功能
@@ -81,13 +105,7 @@ Unity 文档按版本存放在不同路径，例如：
 | `tmp/` | 下载缓存等临时文件 |
 | `report/` | 生成的 HTML / JSON 报告 |
 
-报告默认命名规则：
-
-- `report/<旧版本>-to-<新版本>.html` — 类型级对比
-- `report/<旧版本>-to-<新版本>-members.html` — 含成员增删
-- `report/<旧版本>-to-<新版本>-signatures.html` — 含成员签名变更
-
-也可通过 `-o` 和 `--json PATH` 自定义输出路径。
+报告默认命名规则：`report/<旧版本>-to-<新版本>.html`（JSON 同理）。
 
 ## 缓存
 

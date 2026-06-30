@@ -8,6 +8,46 @@ from .parser import ApiEntry, ApiSnapshot
 from .versions import UnityVersion
 
 
+def split_namespace_class(link: str) -> tuple[str, str]:
+    """Split a type link into (namespace, class_name)."""
+    if "." in link:
+        namespace, class_name = link.rsplit(".", 1)
+        return namespace, class_name
+    return "", link
+
+
+def group_entries_by_namespace(
+    entries: list[ApiEntry],
+) -> list[tuple[str, list[ApiEntry]]]:
+    buckets: dict[str, list[ApiEntry]] = {}
+    for entry in entries:
+        namespace, _ = split_namespace_class(entry.link)
+        buckets.setdefault(namespace, []).append(entry)
+    return [
+        (namespace, sorted(items, key=lambda e: e.title.lower()))
+        for namespace, items in sorted(buckets.items(), key=lambda x: x[0].lower())
+    ]
+
+
+def group_member_diffs_by_namespace(
+    diffs: list["TypeMemberDiff"],
+) -> list[tuple[str, list["TypeMemberDiff"]]]:
+    buckets: dict[str, list[TypeMemberDiff]] = {}
+    for diff in diffs:
+        buckets.setdefault(diff.namespace, []).append(diff)
+    return [
+        (namespace, sorted(items, key=lambda d: d.type_title.lower()))
+        for namespace, items in sorted(buckets.items(), key=lambda x: x[0].lower())
+    ]
+
+
+@dataclass
+class MemberInfo:
+    name: str
+    member_link: str
+    signatures: list[str] = field(default_factory=list)
+
+
 @dataclass
 class MemberChange:
     type_link: str
@@ -21,8 +61,9 @@ class MemberChange:
 class TypeMemberDiff:
     type_link: str
     type_title: str
-    added_members: list[str] = field(default_factory=list)
-    removed_members: list[str] = field(default_factory=list)
+    namespace: str
+    added_members: list[MemberInfo] = field(default_factory=list)
+    removed_members: list[MemberInfo] = field(default_factory=list)
     changed_members: list[MemberChange] = field(default_factory=list)
 
     @property
@@ -107,13 +148,38 @@ def diff_members(
                     )
 
         if added or removed or changed:
-            title = type_link.rsplit(".", 1)[-1]
+            namespace, title = split_namespace_class(type_link)
+            added_infos = [
+                MemberInfo(
+                    name=member,
+                    member_link=f"{type_link}.{member}",
+                    signatures=(
+                        new_signatures.get(f"{type_link}.{member}", [])
+                        if new_signatures
+                        else []
+                    ),
+                )
+                for member in added
+            ]
+            removed_infos = [
+                MemberInfo(
+                    name=member,
+                    member_link=f"{type_link}.{member}",
+                    signatures=(
+                        old_signatures.get(f"{type_link}.{member}", [])
+                        if old_signatures
+                        else []
+                    ),
+                )
+                for member in removed
+            ]
             member_diffs.append(
                 TypeMemberDiff(
                     type_link=type_link,
                     type_title=title,
-                    added_members=added,
-                    removed_members=removed,
+                    namespace=namespace,
+                    added_members=added_infos,
+                    removed_members=removed_infos,
                     changed_members=changed,
                 )
             )

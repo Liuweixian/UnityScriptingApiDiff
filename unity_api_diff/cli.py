@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 from . import __version__
 from .diff import diff_members, diff_snapshots
-from .fetcher import DocFetcher, DEFAULT_CACHE_DIR
+from .fetcher import (
+    DEFAULT_CACHE_DIR,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_REQUEST_DELAY,
+    DEFAULT_WORKERS,
+    DocFetcher,
+)
 from .paths import TMP_DIR, default_html_report, default_json_report
 from .report import write_html_report, write_json_report
 
@@ -45,22 +50,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="同时输出 JSON 报告 (默认: report/<from>-to-<to>.json)",
     )
     diff_parser.add_argument(
-        "--members",
-        action="store_true",
-        help="深度对比：抓取共有类型的成员增删（较慢，需请求大量页面）",
-    )
-    diff_parser.add_argument(
-        "--signatures",
-        action="store_true",
-        help="与 --members 联用：对比共有成员的签名变更（更慢）",
-    )
-    diff_parser.add_argument(
         "--cache-dir",
         default=str(DEFAULT_CACHE_DIR),
         help=f"临时文件与缓存目录 (默认: {TMP_DIR}/)",
     )
     diff_parser.add_argument("--no-cache", action="store_true", help="不使用本地缓存")
-    diff_parser.add_argument("--workers", type=int, default=8, help="并发下载线程数")
+    diff_parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"并发下载线程数 (默认: {DEFAULT_WORKERS})",
+    )
+    diff_parser.add_argument(
+        "--request-delay",
+        type=float,
+        default=DEFAULT_REQUEST_DELAY,
+        help=f"每次网络请求后的间隔秒数，用于避免触发限流 (默认: {DEFAULT_REQUEST_DELAY})",
+    )
+    diff_parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=DEFAULT_MAX_RETRIES,
+        help=f"遇到 429/503 时的最大重试次数 (默认: {DEFAULT_MAX_RETRIES})",
+    )
 
     list_parser = sub.add_parser("versions", help="列出可用的 Unity 文档版本")
     list_parser.add_argument(
@@ -82,11 +94,12 @@ def cmd_versions(args: argparse.Namespace) -> int:
 
 
 def cmd_diff(args: argparse.Namespace) -> int:
-    if args.signatures and not args.members:
-        print("错误: --signatures 需要与 --members 一起使用", file=sys.stderr)
-        return 2
-
-    fetcher = DocFetcher(cache_dir=args.cache_dir, workers=args.workers)
+    fetcher = DocFetcher(
+        cache_dir=args.cache_dir,
+        workers=args.workers,
+        request_delay=args.request_delay,
+        max_retries=args.max_retries,
+    )
     use_cache = not args.no_cache
 
     print(f"获取 {args.from_version} 的 API 索引...")
@@ -103,76 +116,66 @@ def cmd_diff(args: argparse.Namespace) -> int:
         f"{len(old_snapshot.links & new_snapshot.links)} 共有"
     )
 
-    if args.members:
-        common = sorted(old_snapshot.links & new_snapshot.links)
-        print(f"抓取 {len(common)} 个共有类型的成员列表 ({args.from_version})...")
-        old_members = fetcher.fetch_class_members(
-            args.from_version,
-            common,
-            use_cache=use_cache,
-            on_progress=_progress,
-        )
-        print(f"抓取 {len(common)} 个共有类型的成员列表 ({args.to_version})...")
-        new_members = fetcher.fetch_class_members(
-            args.to_version,
-            common,
-            use_cache=use_cache,
-            on_progress=_progress,
-        )
+    common = sorted(old_snapshot.links & new_snapshot.links)
+    print(f"抓取 {len(common)} 个共有类型的成员列表 ({args.from_version})...")
+    old_members = fetcher.fetch_class_members(
+        args.from_version,
+        common,
+        use_cache=use_cache,
+        on_progress=_progress,
+    )
+    print(f"抓取 {len(common)} 个共有类型的成员列表 ({args.to_version})...")
+    new_members = fetcher.fetch_class_members(
+        args.to_version,
+        common,
+        use_cache=use_cache,
+        on_progress=_progress,
+    )
 
-        old_sigs = None
-        new_sigs = None
-        if args.signatures:
-            candidate_links: list[str] = []
-            for type_link in common:
-                old_set = old_members.get(type_link, set())
-                new_set = new_members.get(type_link, set())
-                for member in old_set & new_set:
-                    candidate_links.append(f"{type_link}.{member}")
+    candidate_links: list[str] = []
+    for type_link in common:
+        old_set = old_members.get(type_link, set())
+        new_set = new_members.get(type_link, set())
+        for member in old_set & new_set:
+            candidate_links.append(f"{type_link}.{member}")
+        for member in new_set - old_set:
+            candidate_links.append(f"{type_link}.{member}")
+        for member in old_set - new_set:
+            candidate_links.append(f"{type_link}.{member}")
 
-            print(f"抓取 {len(candidate_links)} 个成员页面的签名进行对比...")
-            old_sigs = fetcher.fetch_member_signatures(
-                args.from_version,
-                candidate_links,
-                use_cache=use_cache,
-                on_progress=_progress,
-            )
-            new_sigs = fetcher.fetch_member_signatures(
-                args.to_version,
-                candidate_links,
-                use_cache=use_cache,
-                on_progress=_progress,
-            )
+    print(f"抓取 {len(candidate_links)} 个成员页面的函数签名...")
+    old_sigs = fetcher.fetch_member_signatures(
+        args.from_version,
+        candidate_links,
+        use_cache=use_cache,
+        on_progress=_progress,
+    )
+    new_sigs = fetcher.fetch_member_signatures(
+        args.to_version,
+        candidate_links,
+        use_cache=use_cache,
+        on_progress=_progress,
+    )
 
-        diff = diff_members(diff, old_members, new_members, old_sigs, new_sigs)
-        print(
-            f"成员级差异: {len(diff.changed_types)} 个类型有变更, "
-            f"{diff.summary['changed_members']} 项成员变更"
-        )
+    diff = diff_members(diff, old_members, new_members, old_sigs, new_sigs)
+    print(
+        f"成员级差异: {len(diff.changed_types)} 个类型有变更, "
+        f"{diff.summary['changed_members']} 项成员变更"
+    )
 
     html_output = (
         Path(args.output)
         if args.output
-        else default_html_report(
-            args.from_version,
-            args.to_version,
-            members=args.members,
-            signatures=args.signatures,
-        )
+        else default_html_report(args.from_version, args.to_version)
     )
-    output = write_html_report(diff, html_output, include_members=args.members)
+    output = write_html_report(diff, html_output)
     print(f"HTML 报告已生成: {output.resolve()}")
 
     if args.json is not None:
         json_output = (
             Path(args.json)
             if args.json
-            else default_json_report(
-                args.from_version,
-                args.to_version,
-                members=args.members,
-                signatures=args.signatures,
-            )
+            else default_json_report(args.from_version, args.to_version)
         )
         json_path = write_json_report(diff, json_output)
         print(f"JSON 报告已生成: {json_path.resolve()}")

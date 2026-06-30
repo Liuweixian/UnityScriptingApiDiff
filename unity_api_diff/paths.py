@@ -8,39 +8,16 @@ TMP_DIR = Path("tmp")
 REPORT_DIR = Path("report")
 
 
-def report_stem(
-    from_version: str,
-    to_version: str,
-    *,
-    members: bool = False,
-    signatures: bool = False,
-) -> str:
-    """Build a filename stem like ``2021.3-to-2022.3-members``."""
-    stem = f"{from_version}-to-{to_version}"
-    if signatures:
-        stem += "-signatures"
-    elif members:
-        stem += "-members"
-    return stem
+def report_stem(from_version: str, to_version: str) -> str:
+    """Build a filename stem like ``2021.3-to-2022.3``."""
+    return f"{from_version}-to-{to_version}"
 
 
-def default_html_report(
-    from_version: str,
-    to_version: str,
-    *,
-    members: bool = False,
-    signatures: bool = False,
-) -> Path:
+def default_html_report(from_version: str, to_version: str) -> Path:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    return REPORT_DIR / f"{report_stem(from_version, to_version, members=members, signatures=signatures)}.html"
+    return REPORT_DIR / f"{report_stem(from_version, to_version)}.html"
 
 
-def default_json_report(
-    from_version: str,
-    to_version: str,
-    *,
-    members: bool = False,
-    signatures: bool = False,
-) -> Path:
+def default_json_report(from_version: str, to_version: str) -> Path:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    return REPORT_DIR / f"{report_stem(from_version, to_version, members=members, signatures=signatures)}.json"
+    return REPORT_DIR / f"{report_stem(from_version, to_version)}.json"

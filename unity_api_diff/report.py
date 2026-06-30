@@ -8,7 +8,13 @@ from pathlib import Path
 
 from jinja2 import Template
 
-from .diff import ApiDiff, doc_url
+from .diff import (
+    ApiDiff,
+    doc_url,
+    group_entries_by_namespace,
+    group_member_diffs_by_namespace,
+    split_namespace_class,
+)
 
 REPORT_TEMPLATE = Template(
     """<!DOCTYPE html>
@@ -132,7 +138,17 @@ REPORT_TEMPLATE = Template(
     }
     .member-group { margin-bottom: 0.75rem; }
     .member-group h4 { margin: 0 0 0.35rem; font-size: 0.85rem; color: var(--muted); }
-    .member-group ul { margin: 0; padding-left: 1.25rem; }
+    .namespace-group { margin-bottom: 2rem; }
+    .namespace-group > h2 {
+      font-size: 1.1rem;
+      color: var(--accent);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.35rem;
+      margin: 0 0 0.75rem;
+    }
+    .class-name { font-weight: 600; }
+    .member-item { margin-bottom: 0.5rem; }
+    .member-item .sig-box { margin-top: 0.25rem; }
     .sig-compare {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -176,9 +192,7 @@ REPORT_TEMPLATE = Template(
       <div class="stat added"><div class="num">{{ summary.added }}</div>新增 API</div>
       <div class="stat removed"><div class="num">{{ summary.removed }}</div>移除 API</div>
       <div class="stat changed"><div class="num">{{ summary.changed_types }}</div>变更类型</div>
-      {% if include_members %}
       <div class="stat changed"><div class="num">{{ summary.changed_members }}</div>成员级变更</div>
-      {% endif %}
     </div>
     <div class="controls">
       <input type="search" id="search" placeholder="搜索 API 名称或路径...">
@@ -186,9 +200,7 @@ REPORT_TEMPLATE = Template(
         <button class="active" data-tab="all">全部</button>
         <button data-tab="added">新增</button>
         <button data-tab="removed">移除</button>
-        {% if include_members %}
         <button data-tab="changed">变更</button>
-        {% endif %}
       </div>
     </div>
   </header>
@@ -196,160 +208,233 @@ REPORT_TEMPLATE = Template(
   <main>
     <section id="tab-all" class="active">
       <h2>新增 ({{ summary.added }})</h2>
-      <ul class="entry-list" data-kind="added">
-        {% for entry in diff.added %}
-        <li class="entry" data-search="{{ entry.link }} {{ entry.path }} {{ entry.title }}">
-          <div class="entry-header">
-            <div>
-              <a href="{{ doc_url(diff.to_version, entry.link) }}" target="_blank">{{ entry.link }}</a>
-              <div class="path">{{ entry.path }}</div>
+      {% for namespace, entries in grouped_added %}
+      <div class="namespace-group">
+        <h2>{{ namespace or '(全局)' }}</h2>
+        <ul class="entry-list" data-kind="added">
+          {% for entry in entries %}
+          <li class="entry" data-search="{{ namespace }} {{ entry.link }} {{ entry.path }} {{ entry.title }}">
+            <div class="entry-header">
+              <div>
+                <span class="class-name">{{ entry.title }}</span>
+                <a href="{{ doc_url(diff.to_version, entry.link) }}" target="_blank">{{ entry.link }}</a>
+                <div class="path">{{ entry.path }}</div>
+              </div>
+              <span class="badge added">新增</span>
             </div>
-            <span class="badge added">新增</span>
-          </div>
-        </li>
-        {% else %}
-        <li class="empty">无新增 API</li>
-        {% endfor %}
-      </ul>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% else %}
+      <p class="empty">无新增 API</p>
+      {% endfor %}
 
       <h2 style="margin-top:2rem">移除 ({{ summary.removed }})</h2>
-      <ul class="entry-list" data-kind="removed">
-        {% for entry in diff.removed %}
-        <li class="entry" data-search="{{ entry.link }} {{ entry.path }} {{ entry.title }}">
-          <div class="entry-header">
-            <div>
-              <a href="{{ doc_url(diff.from_version, entry.link) }}" target="_blank">{{ entry.link }}</a>
-              <div class="path">{{ entry.path }}</div>
+      {% for namespace, entries in grouped_removed %}
+      <div class="namespace-group">
+        <h2>{{ namespace or '(全局)' }}</h2>
+        <ul class="entry-list" data-kind="removed">
+          {% for entry in entries %}
+          <li class="entry" data-search="{{ namespace }} {{ entry.link }} {{ entry.path }} {{ entry.title }}">
+            <div class="entry-header">
+              <div>
+                <span class="class-name">{{ entry.title }}</span>
+                <a href="{{ doc_url(diff.from_version, entry.link) }}" target="_blank">{{ entry.link }}</a>
+                <div class="path">{{ entry.path }}</div>
+              </div>
+              <span class="badge removed">移除</span>
             </div>
-            <span class="badge removed">移除</span>
-          </div>
-        </li>
-        {% else %}
-        <li class="empty">无移除 API</li>
-        {% endfor %}
-      </ul>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% else %}
+      <p class="empty">无移除 API</p>
+      {% endfor %}
 
-      {% if include_members %}
       <h2 style="margin-top:2rem">成员变更 ({{ summary.changed_types }})</h2>
-      <ul class="entry-list" data-kind="changed">
-        {% for td in diff.changed_types %}
-        <li class="entry" data-search="{{ td.type_link }} {{ td.type_title }}">
-          <div class="entry-header">
-            <div>
-              <a href="{{ doc_url(diff.to_version, td.type_link) }}" target="_blank">{{ td.type_link }}</a>
+      {% for namespace, type_diffs in grouped_changed %}
+      <div class="namespace-group">
+        <h2>{{ namespace or '(全局)' }}</h2>
+        <ul class="entry-list" data-kind="changed">
+          {% for td in type_diffs %}
+          <li class="entry" data-search="{{ namespace }} {{ td.type_link }} {{ td.type_title }} {% for mi in td.added_members %}{{ mi.name }} {% for s in mi.signatures %}{{ s }} {% endfor %}{% endfor %}{% for mi in td.removed_members %}{{ mi.name }} {% for s in mi.signatures %}{{ s }} {% endfor %}{% endfor %}{% for mc in td.changed_members %}{{ mc.member_name }} {% for s in mc.old_signatures %}{{ s }} {% endfor %}{% for s in mc.new_signatures %}{{ s }} {% endfor %}{% endfor %}">
+            <div class="entry-header">
+              <div>
+                <span class="class-name">{{ td.type_title }}</span>
+                <a href="{{ doc_url(diff.to_version, td.type_link) }}" target="_blank">{{ td.type_link }}</a>
+              </div>
+              <span class="badge changed">变更</span>
             </div>
-            <span class="badge changed">变更</span>
-          </div>
-          <div class="member-block">
-            {% if td.added_members %}
-            <div class="member-group">
-              <h4>新增成员 ({{ td.added_members|length }})</h4>
-              <ul>
-                {% for m in td.added_members %}
-                <li><a href="{{ doc_url(diff.to_version, td.type_link + '.' + m) }}" target="_blank">{{ m }}</a></li>
-                {% endfor %}
-              </ul>
-            </div>
-            {% endif %}
-            {% if td.removed_members %}
-            <div class="member-group">
-              <h4>移除成员 ({{ td.removed_members|length }})</h4>
-              <ul>
-                {% for m in td.removed_members %}
-                <li><a href="{{ doc_url(diff.from_version, td.type_link + '.' + m) }}" target="_blank">{{ m }}</a></li>
-                {% endfor %}
-              </ul>
-            </div>
-            {% endif %}
-            {% for mc in td.changed_members %}
-            <div class="member-group">
-              <h4>签名变更: {{ mc.member_name }}</h4>
-              <div class="sig-compare">
-                <div>
-                  <div class="path">{{ diff.from_version }}</div>
-                  <div class="sig-box old">{{ mc.old_signatures|join('\\n') or '(无签名)' }}</div>
-                </div>
-                <div>
-                  <div class="path">{{ diff.to_version }}</div>
-                  <div class="sig-box new">{{ mc.new_signatures|join('\\n') or '(无签名)' }}</div>
+            <div class="member-block">
+              {% if td.added_members %}
+              <div class="member-group">
+                <h4>新增成员 ({{ td.added_members|length }})</h4>
+                <ul>
+                  {% for mi in td.added_members %}
+                  <li class="member-item">
+                    <a href="{{ doc_url(diff.to_version, mi.member_link) }}" target="_blank">{{ mi.name }}</a>
+                    {% if mi.signatures %}
+                    <div class="sig-box new">{{ mi.signatures|join('\\n') }}</div>
+                    {% endif %}
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+              {% if td.removed_members %}
+              <div class="member-group">
+                <h4>移除成员 ({{ td.removed_members|length }})</h4>
+                <ul>
+                  {% for mi in td.removed_members %}
+                  <li class="member-item">
+                    <a href="{{ doc_url(diff.from_version, mi.member_link) }}" target="_blank">{{ mi.name }}</a>
+                    {% if mi.signatures %}
+                    <div class="sig-box old">{{ mi.signatures|join('\\n') }}</div>
+                    {% endif %}
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+              {% for mc in td.changed_members %}
+              <div class="member-group">
+                <h4>签名变更: <a href="{{ doc_url(diff.to_version, mc.member_link) }}" target="_blank">{{ mc.member_name }}</a></h4>
+                <div class="sig-compare">
+                  <div>
+                    <div class="path">{{ diff.from_version }}</div>
+                    <div class="sig-box old">{{ mc.old_signatures|join('\\n') or '(无签名)' }}</div>
+                  </div>
+                  <div>
+                    <div class="path">{{ diff.to_version }}</div>
+                    <div class="sig-box new">{{ mc.new_signatures|join('\\n') or '(无签名)' }}</div>
+                  </div>
                 </div>
               </div>
+              {% endfor %}
             </div>
-            {% endfor %}
-          </div>
-        </li>
-        {% else %}
-        <li class="empty">无成员级变更</li>
-        {% endfor %}
-      </ul>
-      {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% else %}
+      <p class="empty">无成员级变更</p>
+      {% endfor %}
+
     </section>
 
     <section id="tab-added">
-      <ul class="entry-list">
-        {% for entry in diff.added %}
-        <li class="entry" data-search="{{ entry.link }} {{ entry.path }}">
-          <div class="entry-header">
-            <div>
-              <a href="{{ doc_url(diff.to_version, entry.link) }}" target="_blank">{{ entry.link }}</a>
-              <div class="path">{{ entry.path }}</div>
+      {% for namespace, entries in grouped_added %}
+      <div class="namespace-group">
+        <h2>{{ namespace or '(全局)' }}</h2>
+        <ul class="entry-list">
+          {% for entry in entries %}
+          <li class="entry" data-search="{{ namespace }} {{ entry.link }} {{ entry.path }} {{ entry.title }}">
+            <div class="entry-header">
+              <div>
+                <span class="class-name">{{ entry.title }}</span>
+                <a href="{{ doc_url(diff.to_version, entry.link) }}" target="_blank">{{ entry.link }}</a>
+                <div class="path">{{ entry.path }}</div>
+              </div>
+              <span class="badge added">新增</span>
             </div>
-            <span class="badge added">新增</span>
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
     </section>
 
     <section id="tab-removed">
-      <ul class="entry-list">
-        {% for entry in diff.removed %}
-        <li class="entry" data-search="{{ entry.link }} {{ entry.path }}">
-          <div class="entry-header">
-            <div>
-              <a href="{{ doc_url(diff.from_version, entry.link) }}" target="_blank">{{ entry.link }}</a>
-              <div class="path">{{ entry.path }}</div>
+      {% for namespace, entries in grouped_removed %}
+      <div class="namespace-group">
+        <h2>{{ namespace or '(全局)' }}</h2>
+        <ul class="entry-list">
+          {% for entry in entries %}
+          <li class="entry" data-search="{{ namespace }} {{ entry.link }} {{ entry.path }} {{ entry.title }}">
+            <div class="entry-header">
+              <div>
+                <span class="class-name">{{ entry.title }}</span>
+                <a href="{{ doc_url(diff.from_version, entry.link) }}" target="_blank">{{ entry.link }}</a>
+                <div class="path">{{ entry.path }}</div>
+              </div>
+              <span class="badge removed">移除</span>
             </div>
-            <span class="badge removed">移除</span>
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
     </section>
 
-    {% if include_members %}
     <section id="tab-changed">
-      <ul class="entry-list">
-        {% for td in diff.changed_types %}
-        <li class="entry" data-search="{{ td.type_link }}">
-          <div class="entry-header">
-            <div>
-              <a href="{{ doc_url(diff.to_version, td.type_link) }}" target="_blank">{{ td.type_link }}</a>
-            </div>
-            <span class="badge changed">变更</span>
-          </div>
-          <div class="member-block">
-            {% if td.added_members %}
-            <div class="member-group"><h4>新增成员</h4><ul>{% for m in td.added_members %}<li>{{ m }}</li>{% endfor %}</ul></div>
-            {% endif %}
-            {% if td.removed_members %}
-            <div class="member-group"><h4>移除成员</h4><ul>{% for m in td.removed_members %}<li>{{ m }}</li>{% endfor %}</ul></div>
-            {% endif %}
-            {% for mc in td.changed_members %}
-            <div class="member-group">
-              <h4>签名变更: {{ mc.member_name }}</h4>
-              <div class="sig-compare">
-                <div class="sig-box old">{{ mc.old_signatures|join('\\n') }}</div>
-                <div class="sig-box new">{{ mc.new_signatures|join('\\n') }}</div>
+      {% for namespace, type_diffs in grouped_changed %}
+      <div class="namespace-group">
+        <h2>{{ namespace or '(全局)' }}</h2>
+        <ul class="entry-list">
+          {% for td in type_diffs %}
+          <li class="entry" data-search="{{ namespace }} {{ td.type_link }} {{ td.type_title }}">
+            <div class="entry-header">
+              <div>
+                <span class="class-name">{{ td.type_title }}</span>
+                <a href="{{ doc_url(diff.to_version, td.type_link) }}" target="_blank">{{ td.type_link }}</a>
               </div>
+              <span class="badge changed">变更</span>
             </div>
-            {% endfor %}
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
+            <div class="member-block">
+              {% if td.added_members %}
+              <div class="member-group">
+                <h4>新增成员 ({{ td.added_members|length }})</h4>
+                <ul>
+                  {% for mi in td.added_members %}
+                  <li class="member-item">
+                    <a href="{{ doc_url(diff.to_version, mi.member_link) }}" target="_blank">{{ mi.name }}</a>
+                    {% if mi.signatures %}
+                    <div class="sig-box new">{{ mi.signatures|join('\\n') }}</div>
+                    {% endif %}
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+              {% if td.removed_members %}
+              <div class="member-group">
+                <h4>移除成员 ({{ td.removed_members|length }})</h4>
+                <ul>
+                  {% for mi in td.removed_members %}
+                  <li class="member-item">
+                    <a href="{{ doc_url(diff.from_version, mi.member_link) }}" target="_blank">{{ mi.name }}</a>
+                    {% if mi.signatures %}
+                    <div class="sig-box old">{{ mi.signatures|join('\\n') }}</div>
+                    {% endif %}
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+              {% for mc in td.changed_members %}
+              <div class="member-group">
+                <h4>签名变更: <a href="{{ doc_url(diff.to_version, mc.member_link) }}" target="_blank">{{ mc.member_name }}</a></h4>
+                <div class="sig-compare">
+                  <div>
+                    <div class="path">{{ diff.from_version }}</div>
+                    <div class="sig-box old">{{ mc.old_signatures|join('\\n') or '(无签名)' }}</div>
+                  </div>
+                  <div>
+                    <div class="path">{{ diff.to_version }}</div>
+                    <div class="sig-box new">{{ mc.new_signatures|join('\\n') or '(无签名)' }}</div>
+                  </div>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
     </section>
-    {% endif %}
   </main>
 
   <footer>
@@ -390,19 +475,31 @@ REPORT_TEMPLATE = Template(
 def write_html_report(
     diff: ApiDiff,
     output: Path | str,
-    include_members: bool = False,
 ) -> Path:
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     html = REPORT_TEMPLATE.render(
         diff=diff,
         summary=diff.summary,
-        include_members=include_members,
+        grouped_added=group_entries_by_namespace(diff.added),
+        grouped_removed=group_entries_by_namespace(diff.removed),
+        grouped_changed=group_member_diffs_by_namespace(diff.changed_types),
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         doc_url=doc_url,
     )
     output_path.write_text(html, encoding="utf-8")
     return output_path
+
+
+def _entry_to_dict(entry) -> dict:
+    namespace, class_name = split_namespace_class(entry.link)
+    return {
+        "link": entry.link,
+        "namespace": namespace,
+        "class_name": class_name,
+        "path": entry.path,
+        "title": entry.title,
+    }
 
 
 def write_json_report(diff: ApiDiff, output: Path | str) -> Path:
@@ -413,19 +510,37 @@ def write_json_report(diff: ApiDiff, output: Path | str) -> Path:
         "from_version": diff.from_version,
         "to_version": diff.to_version,
         "summary": diff.summary,
-        "added": [
-            {"link": e.link, "path": e.path, "title": e.title}
-            for e in diff.added
-        ],
-        "removed": [
-            {"link": e.link, "path": e.path, "title": e.title}
-            for e in diff.removed
-        ],
+        "added": [_entry_to_dict(e) for e in diff.added],
+        "removed": [_entry_to_dict(e) for e in diff.removed],
+        "added_by_namespace": {
+            namespace or "(global)": [_entry_to_dict(e) for e in entries]
+            for namespace, entries in group_entries_by_namespace(diff.added)
+        },
+        "removed_by_namespace": {
+            namespace or "(global)": [_entry_to_dict(e) for e in entries]
+            for namespace, entries in group_entries_by_namespace(diff.removed)
+        },
         "member_diffs": [
             {
                 "type_link": td.type_link,
-                "added_members": td.added_members,
-                "removed_members": td.removed_members,
+                "namespace": td.namespace,
+                "class_name": td.type_title,
+                "added_members": [
+                    {
+                        "member": mi.name,
+                        "member_link": mi.member_link,
+                        "signatures": mi.signatures,
+                    }
+                    for mi in td.added_members
+                ],
+                "removed_members": [
+                    {
+                        "member": mi.name,
+                        "member_link": mi.member_link,
+                        "signatures": mi.signatures,
+                    }
+                    for mi in td.removed_members
+                ],
                 "changed_members": [
                     {
                         "member": mc.member_name,
@@ -438,6 +553,41 @@ def write_json_report(diff: ApiDiff, output: Path | str) -> Path:
             }
             for td in diff.changed_types
         ],
+        "member_diffs_by_namespace": {
+            namespace or "(global)": [
+                {
+                    "type_link": td.type_link,
+                    "class_name": td.type_title,
+                    "added_members": [
+                        {
+                            "member": mi.name,
+                            "member_link": mi.member_link,
+                            "signatures": mi.signatures,
+                        }
+                        for mi in td.added_members
+                    ],
+                    "removed_members": [
+                        {
+                            "member": mi.name,
+                            "member_link": mi.member_link,
+                            "signatures": mi.signatures,
+                        }
+                        for mi in td.removed_members
+                    ],
+                    "changed_members": [
+                        {
+                            "member": mc.member_name,
+                            "member_link": mc.member_link,
+                            "old_signatures": mc.old_signatures,
+                            "new_signatures": mc.new_signatures,
+                        }
+                        for mc in td.changed_members
+                    ],
+                }
+                for td in type_diffs
+            ]
+            for namespace, type_diffs in group_member_diffs_by_namespace(diff.changed_types)
+        },
     }
 
     output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
