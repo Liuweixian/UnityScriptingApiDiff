@@ -15,14 +15,8 @@ from .fetcher import (
     DocFetcher,
 )
 from .paths import TMP_DIR, default_html_report, default_json_report
+from .progress import ProgressTracker
 from .report import write_html_report, write_json_report
-
-
-def _progress(done: int, total: int, label: str) -> None:
-    pct = (done / total * 100) if total else 100
-    print(f"\r  [{done}/{total}] {pct:5.1f}%  {label[:60]:<60}", end="", flush=True)
-    if done == total:
-        print()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -117,45 +111,52 @@ def cmd_diff(args: argparse.Namespace) -> int:
     )
 
     common = sorted(old_snapshot.links & new_snapshot.links)
-    print(f"抓取 {len(common)} 个共有类型的成员列表 ({args.from_version})...")
-    old_members = fetcher.fetch_class_members(
-        args.from_version,
-        common,
-        use_cache=use_cache,
-        on_progress=_progress,
+    member_jobs = (
+        [(args.from_version, link) for link in common]
+        + [(args.to_version, link) for link in common]
     )
-    print(f"抓取 {len(common)} 个共有类型的成员列表 ({args.to_version})...")
-    new_members = fetcher.fetch_class_members(
-        args.to_version,
-        common,
+    print(f"抓取 {len(common)} 个共有类型的成员列表（两版本共 {len(member_jobs)} 项）...")
+    member_progress = ProgressTracker("成员列表")
+    all_members = fetcher.fetch_class_members_batch(
+        member_jobs,
         use_cache=use_cache,
-        on_progress=_progress,
+        progress=member_progress,
     )
+    old_members = {link: all_members[(args.from_version, link)] for link in common}
+    new_members = {link: all_members[(args.to_version, link)] for link in common}
 
-    candidate_links: list[str] = []
+    intersection_links: list[str] = []
+    added_only_links: list[str] = []
+    removed_only_links: list[str] = []
     for type_link in common:
         old_set = old_members.get(type_link, set())
         new_set = new_members.get(type_link, set())
         for member in old_set & new_set:
-            candidate_links.append(f"{type_link}.{member}")
+            intersection_links.append(f"{type_link}.{member}")
         for member in new_set - old_set:
-            candidate_links.append(f"{type_link}.{member}")
+            added_only_links.append(f"{type_link}.{member}")
         for member in old_set - new_set:
-            candidate_links.append(f"{type_link}.{member}")
+            removed_only_links.append(f"{type_link}.{member}")
 
-    print(f"抓取 {len(candidate_links)} 个成员页面的函数签名...")
-    old_sigs = fetcher.fetch_member_signatures(
-        args.from_version,
-        candidate_links,
-        use_cache=use_cache,
-        on_progress=_progress,
+    sig_jobs = (
+        [(args.from_version, link) for link in intersection_links + removed_only_links]
+        + [(args.to_version, link) for link in intersection_links + added_only_links]
     )
-    new_sigs = fetcher.fetch_member_signatures(
-        args.to_version,
-        candidate_links,
+    print(f"抓取成员签名（共 {len(sig_jobs)} 项）...")
+    sig_progress = ProgressTracker("成员签名")
+    all_sigs = fetcher.fetch_member_signatures_batch(
+        sig_jobs,
         use_cache=use_cache,
-        on_progress=_progress,
+        progress=sig_progress,
     )
+    old_sigs = {
+        link: all_sigs[(args.from_version, link)]
+        for link in intersection_links + removed_only_links
+    }
+    new_sigs = {
+        link: all_sigs[(args.to_version, link)]
+        for link in intersection_links + added_only_links
+    }
 
     diff = diff_members(diff, old_members, new_members, old_sigs, new_sigs)
     print(
