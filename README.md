@@ -32,25 +32,29 @@ python main.py versions
 ### 快速对比（仅类型级增删）
 
 ```bash
-python main.py diff --from 2021.3 --to 2022.3 -o report.html
+python main.py diff --from 2021.3 --to 2022.3
+# → report/2021.3-to-2022.3.html
 ```
 
 ### 深度对比（含成员增删）
 
 ```bash
-python main.py diff --from 2021.3 --to 2022.3 --members -o report.html
+python main.py diff --from 2021.3 --to 2022.3 --members
+# → report/2021.3-to-2022.3-members.html
 ```
 
 ### 完整对比（含成员签名变更）
 
 ```bash
-python main.py diff --from 2021.3 --to 2022.3 --members --signatures -o report.html
+python main.py diff --from 2021.3 --to 2022.3 --members --signatures
+# → report/2021.3-to-2022.3-signatures.html
 ```
 
 ### 同时输出 JSON
 
 ```bash
-python main.py diff --from 2021.3 --to 2022.3 --json diff.json -o report.html
+python main.py diff --from 2021.3 --to 2022.3 --json
+# → report/2021.3-to-2022.3.html + report/2021.3-to-2022.3.json
 ```
 
 ## 报告功能
@@ -70,9 +74,24 @@ Unity 文档按版本存放在不同路径，例如：
 - `6000.3` → `https://docs.unity3d.com/6000.3/Documentation/ScriptReference/`
 - `5.6` → `https://docs.unity3d.com/560/Documentation/ScriptReference/`
 
+## 目录结构
+
+| 目录 | 用途 |
+|------|------|
+| `tmp/` | 下载缓存等临时文件 |
+| `report/` | 生成的 HTML / JSON 报告 |
+
+报告默认命名规则：
+
+- `report/<旧版本>-to-<新版本>.html` — 类型级对比
+- `report/<旧版本>-to-<新版本>-members.html` — 含成员增删
+- `report/<旧版本>-to-<新版本>-signatures.html` — 含成员签名变更
+
+也可通过 `-o` 和 `--json PATH` 自定义输出路径。
+
 ## 缓存
 
-下载的数据会缓存在 `.cache/` 目录，重复运行会更快。使用 `--no-cache` 可强制重新下载。
+下载的数据会缓存在 `tmp/` 目录，重复运行会更快。使用 `--no-cache` 可强制重新下载。
 
 ## 限制
 

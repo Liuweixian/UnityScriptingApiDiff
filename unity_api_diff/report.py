@@ -393,6 +393,7 @@ def write_html_report(
     include_members: bool = False,
 ) -> Path:
     output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     html = REPORT_TEMPLATE.render(
         diff=diff,
         summary=diff.summary,
@@ -406,6 +407,7 @@ def write_html_report(
 
 def write_json_report(diff: ApiDiff, output: Path | str) -> Path:
     output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = {
         "from_version": diff.from_version,

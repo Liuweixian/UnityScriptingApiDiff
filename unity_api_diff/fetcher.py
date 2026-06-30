@@ -11,9 +11,10 @@ from typing import Callable
 import requests
 
 from .parser import ApiSnapshot, extract_class_members, extract_signatures, parse_toc_js
+from .paths import TMP_DIR
 from .versions import VERSIONS_INFO_URL, DEFAULT_VERSIONS, UnityVersion, parse_versions_info
 
-DEFAULT_CACHE_DIR = Path(".cache")
+DEFAULT_CACHE_DIR = TMP_DIR
 USER_AGENT = "UnityScriptingApiDiff/0.1 (+https://github.com/)"
 
 

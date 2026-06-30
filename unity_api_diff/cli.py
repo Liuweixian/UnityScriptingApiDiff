@@ -8,7 +8,8 @@ from pathlib import Path
 
 from . import __version__
 from .diff import diff_members, diff_snapshots
-from .fetcher import DocFetcher
+from .fetcher import DocFetcher, DEFAULT_CACHE_DIR
+from .paths import TMP_DIR, default_html_report, default_json_report
 from .report import write_html_report, write_json_report
 
 
@@ -32,9 +33,17 @@ def build_parser() -> argparse.ArgumentParser:
     diff_parser.add_argument("--from", dest="from_version", required=True, help="旧版本，如 2021.3")
     diff_parser.add_argument("--to", dest="to_version", required=True, help="新版本，如 2022.3")
     diff_parser.add_argument(
-        "-o", "--output", default="api-diff.html", help="输出 HTML 文件路径 (默认: api-diff.html)"
+        "-o",
+        "--output",
+        help="输出 HTML 文件路径 (默认: report/<from>-to-<to>.html)",
     )
-    diff_parser.add_argument("--json", help="同时输出 JSON 报告到指定路径")
+    diff_parser.add_argument(
+        "--json",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help="同时输出 JSON 报告 (默认: report/<from>-to-<to>.json)",
+    )
     diff_parser.add_argument(
         "--members",
         action="store_true",
@@ -45,12 +54,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="与 --members 联用：对比共有成员的签名变更（更慢）",
     )
-    diff_parser.add_argument("--cache-dir", default=".cache", help="缓存目录 (默认: .cache)")
+    diff_parser.add_argument(
+        "--cache-dir",
+        default=str(DEFAULT_CACHE_DIR),
+        help=f"临时文件与缓存目录 (默认: {TMP_DIR}/)",
+    )
     diff_parser.add_argument("--no-cache", action="store_true", help="不使用本地缓存")
     diff_parser.add_argument("--workers", type=int, default=8, help="并发下载线程数")
 
     list_parser = sub.add_parser("versions", help="列出可用的 Unity 文档版本")
-    list_parser.add_argument("--cache-dir", default=".cache")
+    list_parser.add_argument(
+        "--cache-dir",
+        default=str(DEFAULT_CACHE_DIR),
+        help=f"临时文件与缓存目录 (默认: {TMP_DIR}/)",
+    )
 
     return parser
 
@@ -133,11 +150,31 @@ def cmd_diff(args: argparse.Namespace) -> int:
             f"{diff.summary['changed_members']} 项成员变更"
         )
 
-    output = write_html_report(diff, args.output, include_members=args.members)
+    html_output = (
+        Path(args.output)
+        if args.output
+        else default_html_report(
+            args.from_version,
+            args.to_version,
+            members=args.members,
+            signatures=args.signatures,
+        )
+    )
+    output = write_html_report(diff, html_output, include_members=args.members)
     print(f"HTML 报告已生成: {output.resolve()}")
 
-    if args.json:
-        json_path = write_json_report(diff, args.json)
+    if args.json is not None:
+        json_output = (
+            Path(args.json)
+            if args.json
+            else default_json_report(
+                args.from_version,
+                args.to_version,
+                members=args.members,
+                signatures=args.signatures,
+            )
+        )
+        json_path = write_json_report(diff, json_output)
         print(f"JSON 报告已生成: {json_path.resolve()}")
 
     return 0
